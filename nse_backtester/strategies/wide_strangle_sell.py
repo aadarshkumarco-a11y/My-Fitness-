@@ -208,16 +208,6 @@ class WideStrangleSellStrategy(Strategy):
                 continue
 
             capital += total_premium - entry_brokerage
-            trades.append(Trade(
-                timestamp=entry_date, symbol=symbol, side="SELL",
-                quantity=total_qty, price=prem_ce,
-                notes=f"Sell {int(strike_ce)}CE @ {prem_ce:.2f}",
-            ))
-            trades.append(Trade(
-                timestamp=entry_date, symbol=symbol, side="SELL",
-                quantity=total_qty, price=prem_pe,
-                notes=f"Sell {int(strike_pe)}PE @ {prem_pe:.2f}",
-            ))
 
             expiry_idx = None
             for j in range(i, len(df)):
@@ -244,17 +234,16 @@ class WideStrangleSellStrategy(Strategy):
             capital -= (payout_ce + payout_pe + exit_brokerage)
             net_pnl = total_premium - entry_brokerage - payout_ce - payout_pe - exit_brokerage
 
+            # Record one trade per strangle with net P&L (so win-rate / profit-factor make sense).
             trades.append(Trade(
-                timestamp=df.iloc[expiry_idx]["_ts"], symbol=symbol, side="BUY",
-                quantity=total_qty, price=payout_ce / max(total_qty, 1),
-                pnl=-payout_ce,
-                notes=f"Close {int(strike_ce)}CE @ intrinsic {payout_ce / total_qty:.2f}",
-            ))
-            trades.append(Trade(
-                timestamp=df.iloc[expiry_idx]["_ts"], symbol=symbol, side="BUY",
-                quantity=total_qty, price=payout_pe / max(total_qty, 1),
-                pnl=-payout_pe,
-                notes=f"Close {int(strike_pe)}PE @ intrinsic {payout_pe / total_qty:.2f}",
+                timestamp=df.iloc[expiry_idx]["_ts"], symbol=symbol, side="STRANGLE",
+                quantity=total_qty, price=spot_exp,
+                pnl=net_pnl,
+                notes=(
+                    f"Strangle {int(strike_pe)}PE/{int(strike_ce)}CE "
+                    f"prem={total_premium:.0f} payout={payout_ce + payout_pe:.0f} "
+                    f"net={net_pnl:.0f}"
+                ),
             ))
 
             strangle_trades.append(_StrangleTrade(

@@ -258,6 +258,15 @@ if run_btn:
     cols2[2].metric("# Trades", f"{metrics['num_trades']}")
     cols2[3].metric("Final Equity", f"₹{metrics['final_equity']:,.0f}")
 
+    # Trade breakdown row
+    cols3 = st.columns(4)
+    cols3[0].metric("Total Trades", f"{metrics.get('total_trades', metrics['num_trades'])}")
+    cols3[1].metric("Profit Trades", f"{metrics.get('profit_trades', 0)}")
+    cols3[2].metric("Loss Trades", f"{metrics.get('loss_trades', 0)}")
+    total_closed = metrics.get("profit_trades", 0) + metrics.get("loss_trades", 0)
+    win_pct = (metrics.get("profit_trades", 0) / total_closed * 100.0) if total_closed > 0 else 0.0
+    cols3[3].metric("Win %", f"{win_pct:.2f}%")
+
     fig_eq = plot_equity_curve(result.equity_curve)
     if fig_eq is not None:
         st.plotly_chart(fig_eq, use_container_width=True)

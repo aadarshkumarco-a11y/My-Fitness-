@@ -49,6 +49,25 @@ def _win_rate(trades: pd.DataFrame) -> float:
     return float(wins / len(closing))
 
 
+def _trade_breakdown(trades: pd.DataFrame) -> Dict[str, int]:
+    """Count total / winning / losing / break-even closed trades.
+
+    A "closed" trade is one with non-zero pnl (entries with pnl=0 are open legs).
+    """
+    if trades is None or trades.empty or "pnl" not in trades.columns:
+        return {"total_trades": 0, "profit_trades": 0, "loss_trades": 0, "even_trades": 0}
+    closed = trades[trades["pnl"].fillna(0) != 0]
+    profit = int((closed["pnl"] > 0).sum())
+    loss = int((closed["pnl"] < 0).sum())
+    even = int(len(trades) - profit - loss)
+    return {
+        "total_trades": int(len(trades)),
+        "profit_trades": profit,
+        "loss_trades": loss,
+        "even_trades": even,
+    }
+
+
 def compute_metrics(
     equity_curve: pd.DataFrame,
     trades: pd.DataFrame,
@@ -61,6 +80,8 @@ def compute_metrics(
             "net_profit": 0.0, "roi_pct": 0.0, "win_rate_pct": 0.0,
             "max_drawdown_pct": 0.0, "sharpe": 0.0, "profit_factor": 0.0,
             "num_trades": 0, "final_equity": float(initial_capital),
+            "total_trades": 0, "profit_trades": 0, "loss_trades": 0,
+            "even_trades": 0,
         }
 
     equity = equity_curve["equity"] if "equity" in equity_curve.columns else equity_curve.iloc[:, 0]
@@ -72,6 +93,7 @@ def compute_metrics(
     max_dd = _max_drawdown(equity) * 100.0
     win_rate = _win_rate(trades) * 100.0
     profit_factor = _profit_factor(trades)
+    breakdown = _trade_breakdown(trades)
 
     return {
         "net_profit": float(net_profit),
@@ -82,4 +104,5 @@ def compute_metrics(
         "profit_factor": float(profit_factor),
         "num_trades": int(0 if trades is None or trades.empty else len(trades)),
         "final_equity": final_equity,
+        **breakdown,
     }
