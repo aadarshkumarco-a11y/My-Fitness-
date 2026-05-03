@@ -170,3 +170,78 @@ class DataEngine:
             }
         )
         return df
+
+    # --------------------------------------------- trend-rich synthetic ohlcv
+    @staticmethod
+    def trend_rich_ohlcv(
+        days: int = 365,
+        seed: int = 42,
+        start_price: float = 18000.0,
+        symbol: str = "NIFTY",
+        freq: str = "B",
+        regime_length: int = 30,
+    ) -> pd.DataFrame:
+        """Synthetic OHLCV with realistic regimes: alternating trends + ranges,
+        volume spikes around trend changes. Designed so that complex strategies
+        with EMA crossovers, VWAP filters, and volume confirmation actually
+        produce signals (unlike pure random-walk synthetic data).
+        """
+        rng = np.random.default_rng(seed)
+        idx = pd.date_range(end=pd.Timestamp.today().normalize(), periods=days, freq=freq)
+        if len(idx) == 0:
+            idx = pd.date_range(end=pd.Timestamp.today().normalize(), periods=days)
+        n = len(idx)
+
+        regimes = []
+        i = 0
+        while i < n:
+            seg_len = max(8, int(rng.normal(regime_length, regime_length / 3)))
+            seg_kind = rng.choice(["bull", "bear", "range"], p=[0.4, 0.3, 0.3])
+            seg_len = min(seg_len, n - i)
+            if seg_kind == "bull":
+                drift = rng.uniform(0.0015, 0.004)
+                vol = rng.uniform(0.008, 0.014)
+            elif seg_kind == "bear":
+                drift = -rng.uniform(0.0015, 0.004)
+                vol = rng.uniform(0.010, 0.018)
+            else:
+                drift = rng.uniform(-0.0005, 0.0005)
+                vol = rng.uniform(0.006, 0.012)
+            regimes.extend([(seg_kind, drift, vol)] * seg_len)
+            i += seg_len
+
+        regime_arr = regimes[:n]
+        drifts = np.array([r[1] for r in regime_arr])
+        vols = np.array([r[2] for r in regime_arr])
+        kinds = [r[0] for r in regime_arr]
+
+        returns = drifts + rng.normal(0.0, vols)
+        prices = start_price * np.exp(np.cumsum(returns))
+        opens = prices * (1 + rng.normal(0, 0.0025, size=n))
+
+        rng2 = np.random.default_rng(seed + 1)
+        candle_dir_bias = np.where(np.array(drifts) > 0, 0.3, -0.3) + np.where(np.array(drifts) < 0, 0.0, 0.0)
+        bias_offsets = rng2.normal(0, 0.004, size=n) + candle_dir_bias * 0.003
+        opens = prices * np.exp(-bias_offsets)
+        highs = np.maximum(opens, prices) * (1 + np.abs(rng2.normal(0, 0.0035, size=n)))
+        lows = np.minimum(opens, prices) * (1 - np.abs(rng2.normal(0, 0.0035, size=n)))
+
+        base_vol = rng.integers(1_000_000, 3_000_000, size=n).astype(float)
+        change_idx = [i for i in range(1, n) if kinds[i] != kinds[i - 1]]
+        for ci in change_idx:
+            for k, mult in zip(range(max(0, ci - 1), min(n, ci + 4)), [1.5, 2.0, 1.8, 1.5, 1.3]):
+                base_vol[k] *= mult
+        volumes = base_vol.astype(int)
+
+        df = pd.DataFrame(
+            {
+                "timestamp": idx,
+                "symbol": symbol.upper(),
+                "open": opens,
+                "high": highs,
+                "low": lows,
+                "close": prices,
+                "volume": volumes,
+            }
+        )
+        return df

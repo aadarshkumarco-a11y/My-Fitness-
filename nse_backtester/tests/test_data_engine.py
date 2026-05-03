@@ -9,6 +9,16 @@ def test_synthetic_ohlcv_shape():
     assert (df["close"] > 0).all()
 
 
+def test_trend_rich_ohlcv_shape_and_signal_friendly():
+    df = DataEngine.trend_rich_ohlcv(days=200, seed=7)
+    assert len(df) > 0
+    assert {"open", "high", "low", "close", "volume", "timestamp"}.issubset(df.columns)
+    assert (df["close"] > 0).all()
+    # Trend-rich series must contain regime variation; max-min ratio should be wide.
+    ratio = float(df["close"].max() / df["close"].min())
+    assert ratio > 1.05, f"trend-rich data too flat (ratio={ratio:.3f})"
+
+
 def test_parse_option_chain_handles_missing_fields():
     de = DataEngine.__new__(DataEngine)
     payload = {

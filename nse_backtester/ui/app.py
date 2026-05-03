@@ -104,7 +104,17 @@ with st.sidebar:
     days = st.slider("Days of history", min_value=60, max_value=1500, value=365, step=30)
     seed = st.number_input("RNG seed (for synthetic data)", value=42, step=1)
     use_options = st.checkbox("Run on options (weekly ATM, BS pricing)", value=False)
-    data_source = st.radio("Data source", ["Synthetic", "Live (NSE scraper)"], index=0)
+    data_source = st.radio(
+        "Data source",
+        ["Synthetic (random walk)", "Synthetic (trend-rich, recommended)", "Live (NSE scraper)"],
+        index=1,
+        help=(
+            "Trend-rich is best for testing strategies with multi-condition AND filters "
+            "(EMA crossover + VWAP + volume) — pure random walk often produces 0 trades. "
+            "Live NSE scraping does not work on Streamlit Cloud (datacenter IP blocked); "
+            "it auto-falls-back to synthetic data."
+        ),
+    )
     brokerage = st.number_input("Brokerage per trade (₹)", value=20.0, step=1.0)
     slippage = st.number_input("Slippage (% as decimal)", value=0.005, format="%f")
     run_btn = st.button("▶ Run backtest", use_container_width=True, type="primary")
@@ -143,14 +153,24 @@ elif strategy_source == "Custom Python":
             "Define a class extending "
             "`nse_backtester.strategy_engine.base.Strategy` with a "
             "`generate_signals(self, data)` method that returns a DataFrame "
-            "with a `signal` column (`BUY` / `SELL` / `HOLD` / `EXIT`)."
+            "with a `signal` column (`BUY` / `SELL` / `HOLD` / `EXIT`).\n\n"
+            "**Imports available:** `rsi`, `ema`, `sma`, `vwap`, `atr`, `crossover`, "
+            "`crossunder` from `nse_backtester.strategy_engine.indicators`.\n\n"
+            "**Common bug → 0 trades:** if you assign `signal='EXIT'` AFTER `signal='BUY'` "
+            "without a guard, EXIT overwrites BUY. Always guard EXIT with "
+            "`(out['signal'] == 'HOLD')`. The default template below shows the correct pattern."
         )
-        strategy_payload = st.text_area("Python", value=default_template(), height=320, label_visibility="collapsed")
+        strategy_payload = st.text_area("Python", value=default_template(), height=380, label_visibility="collapsed")
 
 
 @st.cache_data(show_spinner=False)
 def _synthetic_data(symbol: str, days: int, seed: int) -> pd.DataFrame:
     return DataEngine.synthetic_ohlcv(days=days, seed=int(seed), symbol=symbol)
+
+
+@st.cache_data(show_spinner=False)
+def _trend_rich_data(symbol: str, days: int, seed: int) -> pd.DataFrame:
+    return DataEngine.trend_rich_ohlcv(days=days, seed=int(seed), symbol=symbol)
 
 
 def _build_strategy(source: str, name: str | None, payload: str | None, params: dict | None = None):
@@ -172,20 +192,25 @@ def _build_strategy(source: str, name: str | None, payload: str | None, params: 
 
 
 def _load_data(source: str, symbol: str, days: int, seed: int) -> pd.DataFrame:
-    if source == "Synthetic":
+    if source.startswith("Synthetic (trend-rich"):
+        return _trend_rich_data(symbol, days, int(seed))
+    if source.startswith("Synthetic"):
         return _synthetic_data(symbol, days, int(seed))
     try:
         de = DataEngine(scraper=NSEScraper())
         snap = de.fetch_option_chain(symbol)
-        if snap is not None:
+        if snap is not None and snap.spot and snap.spot > 0:
             st.info(
                 f"Fetched live spot for {symbol}: ₹{snap.spot:,.2f} (ATM strike: {snap.atm_strike})"
             )
         else:
-            st.warning("Could not fetch live data — falling back to synthetic OHLCV.")
+            st.warning(
+                "NSE live fetch returned no data (this is normal on Streamlit Cloud — "
+                "NSE blocks datacenter IPs). Falling back to trend-rich synthetic OHLCV."
+            )
     except Exception as exc:  # pragma: no cover
-        st.warning(f"Live fetch failed ({exc}). Falling back to synthetic OHLCV.")
-    return _synthetic_data(symbol, days, int(seed))
+        st.warning(f"Live fetch failed ({exc}). Falling back to trend-rich synthetic OHLCV.")
+    return _trend_rich_data(symbol, days, int(seed))
 
 
 if run_btn:
@@ -244,6 +269,42 @@ if run_btn:
     export_results(result.run_id, trades_df, result.equity_curve, result.drawdown_curve, metrics)
 
     st.success(f"Run complete — id `{result.run_id}`")
+
+    # ─── Signal diagnostics: catch the most common cause of 0-trade results ───
+    sig_counts = {"BUY": 0, "SELL": 0, "EXIT": 0, "HOLD": 0}
+    if "signal" in result.signals.columns:
+        for k, v in result.signals["signal"].astype(str).str.upper().value_counts().items():
+            sig_counts[k] = int(v)
+    n_trades = len(result.trades)
+
+    diag = st.columns(4)
+    diag[0].metric("BUY signals", sig_counts.get("BUY", 0))
+    diag[1].metric("SELL signals", sig_counts.get("SELL", 0))
+    diag[2].metric("EXIT signals", sig_counts.get("EXIT", 0))
+    diag[3].metric("HOLD signals", sig_counts.get("HOLD", 0))
+
+    if n_trades == 0:
+        if sig_counts.get("BUY", 0) == 0:
+            st.error(
+                "**0 BUY signals → 0 trades.** Your strategy never fired a BUY. "
+                "**Two most common causes:**\n\n"
+                "1. **EXIT overwriting BUY** — if you set `signal='EXIT'` AFTER setting "
+                "`signal='BUY'` without a guard, EXIT wipes BUY. **Fix:** apply EXIT "
+                "only where signal is still `'HOLD'`:\n"
+                "   ```python\n"
+                "   is_hold = out['signal'] == 'HOLD'\n"
+                "   out.loc[(exit_cond) & is_hold, 'signal'] = 'EXIT'\n"
+                "   ```\n"
+                "2. **Conditions too restrictive** — multi-AND with vwap+volume+candle "
+                "filters often fires 0 times on synthetic data. Try the "
+                "**'Synthetic (trend-rich)'** data source in the sidebar, or relax filters."
+            )
+        else:
+            st.warning(
+                f"**{sig_counts['BUY']} BUY signals generated but 0 trades executed.** "
+                "Likely causes: brokerage > capital, position size 0, or entry filtered "
+                "by stop-loss check. Try increasing initial capital or reducing brokerage."
+            )
 
     cols = st.columns(4)
     cols[0].metric("Net Profit (₹)", f"{metrics['net_profit']:,.0f}")

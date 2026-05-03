@@ -15,6 +15,16 @@ def test_default_template_is_loadable():
     assert "signal" in out.columns
 
 
+def test_default_template_fires_buy_signals():
+    """The default template must produce >= 1 BUY signal on standard synthetic data,
+    otherwise users land on a strategy that gives them 0 trades."""
+    cls = load_custom_strategy(default_template())
+    inst = cls()
+    out = inst.generate_signals(DataEngine.synthetic_ohlcv(days=365, seed=42))
+    n_buy = int((out["signal"].astype(str).str.upper() == "BUY").sum())
+    assert n_buy >= 5, f"default template fired only {n_buy} BUY signals (expected >= 5)"
+
+
 def test_simple_custom_strategy():
     code = """
 from nse_backtester.strategy_engine.base import Strategy
