@@ -78,6 +78,21 @@ with st.sidebar:
     else:
         strategy_name = None
 
+    # Strategy-specific parameters (currently for wide_strangle_sell)
+    strangle_params: dict | None = None
+    if strategy_source == "Built-in" and strategy_name == "wide_strangle_sell":
+        with st.expander("Wide strangle parameters", expanded=True):
+            strangle_params = {
+                "gap": st.number_input("Strike gap (points OTM)", value=1700, step=50),
+                "strike_step": st.number_input("Strike step", value=100, step=50),
+                "lot_size": st.number_input("Lot size", value=35, step=1),
+                "lots": st.number_input("Lots per leg", value=1, step=1, min_value=1),
+                "volatility": st.number_input("IV (annual, e.g. 0.18)", value=0.18, step=0.01, format="%f"),
+                "risk_free_rate": st.number_input("Risk-free rate", value=0.06, step=0.01, format="%f"),
+                "brokerage_per_leg": st.number_input("Brokerage per leg (₹)", value=20.0, step=1.0),
+                "slippage_pct": st.number_input("Premium slippage", value=0.005, step=0.001, format="%f"),
+            }
+
     symbol = st.text_input("Symbol", value="NIFTY")
     capital = st.number_input(
         "Initial capital (₹)",
@@ -138,9 +153,12 @@ def _synthetic_data(symbol: str, days: int, seed: int) -> pd.DataFrame:
     return DataEngine.synthetic_ohlcv(days=days, seed=int(seed), symbol=symbol)
 
 
-def _build_strategy(source: str, name: str | None, payload: str | None):
+def _build_strategy(source: str, name: str | None, payload: str | None, params: dict | None = None):
     if source == "Built-in":
-        return get_strategy(name)()
+        cls = get_strategy(name)
+        if params:
+            return cls(**params)
+        return cls()
     if source == "Rule DSL":
         return DSLStrategy(payload or "")
     if source == "Pine Script (subset)":
@@ -172,7 +190,7 @@ def _load_data(source: str, symbol: str, days: int, seed: int) -> pd.DataFrame:
 
 if run_btn:
     try:
-        strategy = _build_strategy(strategy_source, strategy_name, strategy_payload)
+        strategy = _build_strategy(strategy_source, strategy_name, strategy_payload, strangle_params)
     except (DSLParseError, PineParseError, CustomStrategyError) as exc:
         st.error(f"Strategy error: {exc}")
         st.stop()
@@ -193,13 +211,19 @@ if run_btn:
 
     with st.spinner("Running backtest..."):
         try:
-            if use_options:
+            if getattr(strategy, "supports_self_backtest", False):
+                st.info("Strategy uses its own simulator (short options / multi-leg).")
+                result = strategy.run_full_backtest(
+                    data, initial_capital=capital, symbol=symbol,
+                )
+            elif use_options:
                 engine = OptionsBacktestEngine(
                     strategy=strategy,
                     initial_capital=capital,
                     brokerage_per_trade=brokerage,
                     slippage_pct=slippage,
                 )
+                result = engine.run(data, symbol=symbol)
             else:
                 engine = BacktestEngine(
                     strategy=strategy,
@@ -207,7 +231,7 @@ if run_btn:
                     brokerage_per_trade=brokerage,
                     slippage_pct=slippage,
                 )
-            result = engine.run(data, symbol=symbol)
+                result = engine.run(data, symbol=symbol)
         except Exception as exc:
             st.error(f"Backtest failed: {exc}")
             st.stop()

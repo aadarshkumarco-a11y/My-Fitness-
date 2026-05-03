@@ -34,16 +34,42 @@ class Strategy:
     The contract is strict: ``generate_signals(data)`` must return a DataFrame
     indexed by timestamp with at minimum a ``signal`` column whose values are
     ``SignalType`` members (or their string equivalents).
+
+    Strategies that need richer execution semantics than the standard equity
+    or options engines provide (e.g. multi-leg short option spreads, custom
+    rebalancing logic) can opt into self-contained backtesting by setting
+    ``supports_self_backtest = True`` and overriding ``run_full_backtest``.
+    The dashboard and CLI dispatch to that method instead of the generic
+    engine when the flag is set.
     """
 
     name: str = "base"
     description: str = ""
+    supports_self_backtest: bool = False
 
     def __init__(self, **params: Any) -> None:
         self.params: Dict[str, Any] = params
 
     def generate_signals(self, data: pd.DataFrame) -> pd.DataFrame:
         raise NotImplementedError("generate_signals must be implemented")
+
+    def run_full_backtest(
+        self,
+        data: pd.DataFrame,
+        initial_capital: float,
+        symbol: str = "SYMBOL",
+        **kwargs: Any,
+    ):
+        """Optional: run the entire backtest internally and return a
+        :class:`nse_backtester.backtesting.engine.BacktestResult`.
+
+        Override this when ``supports_self_backtest = True``. The default
+        raises :class:`NotImplementedError`.
+        """
+        raise NotImplementedError(
+            "run_full_backtest is only implemented by strategies that set "
+            "supports_self_backtest = True"
+        )
 
     # Optional helpers that subclasses can override --------------------------
     def position_size(
