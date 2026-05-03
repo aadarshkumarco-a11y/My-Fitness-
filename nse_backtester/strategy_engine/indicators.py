@@ -92,3 +92,55 @@ def vwap_strategy_signals(df: pd.DataFrame, period: Optional[int] = None) -> pd.
     out.loc[out["close"] > out["vwap"], "signal"] = "BUY"
     out.loc[out["close"] < out["vwap"], "signal"] = "SELL"
     return out
+
+
+# Public, ergonomic aliases for use in custom strategy code (Streamlit "Custom Python" editor).
+# Signatures: rsi(series, period=14), ema(series, period), sma(series, period),
+# vwap(df, period=None), atr(df, period=14).
+def rsi(series: pd.Series, period: int = 14) -> pd.Series:
+    return _rsi(series, period=period)
+
+
+def ema(series: pd.Series, period: int) -> pd.Series:
+    return _ema(series, period=period)
+
+
+def sma(series: pd.Series, period: int) -> pd.Series:
+    return series.rolling(period).mean()
+
+
+def vwap(df: pd.DataFrame, period: Optional[int] = None) -> pd.Series:
+    return _vwap(df, period=period)
+
+
+def atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    high = df["high"]
+    low = df["low"]
+    close = df["close"]
+    tr = pd.concat(
+        [(high - low), (high - close.shift()).abs(), (low - close.shift()).abs()],
+        axis=1,
+    ).max(axis=1)
+    return tr.rolling(period).mean()
+
+
+def crossover(a: pd.Series, b: pd.Series) -> pd.Series:
+    return (a > b) & (a.shift() <= b.shift())
+
+
+def crossunder(a: pd.Series, b: pd.Series) -> pd.Series:
+    return (a < b) & (a.shift() >= b.shift())
+
+
+__all__ = [
+    "rsi",
+    "ema",
+    "sma",
+    "vwap",
+    "atr",
+    "crossover",
+    "crossunder",
+    "rsi_strategy_signals",
+    "ema_crossover_signals",
+    "vwap_strategy_signals",
+]
